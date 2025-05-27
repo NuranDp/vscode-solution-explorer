@@ -39,6 +39,8 @@ export function activate(context: vscode.ExtensionContext) {
     register(context, solutionExplorerDragAndDropController);
     register(context, templateEngineCollection);
     register(context, solutionExplorerProvider);
+    // Force Solution Explorer to load on startup
+    solutionExplorerProvider.getChildren();
     register(context, solutionExplorerCommands);
     register(context, solutionExplorerFileWatcher);
     register(context, solutionExplorerOutputChannel);
