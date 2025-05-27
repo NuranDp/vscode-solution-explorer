@@ -331,7 +331,7 @@
         "command": "solutionExplorer.showActiveFileInExplorer",
         "title": "Select Active Document",
         "category": "Solution Explorer",
-        "icon": "$(search)"
+        "icon": "$(location)"
       },
       {
         "command": "solutionExplorer.focus",
@@ -377,7 +377,7 @@
           "command": "solutionExplorer.showActiveFileInExplorer",
           "when": "view in solutionexplorer.viewTypes",
           "group": "navigation",
-          "icon": "$(search)"
+          "icon": "$(location)"
         }
       ],
       "view/item/context": [
