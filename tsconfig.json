@@ -1,0 +1,43 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "target": "ES2020",
+        "outDir": "out",
+        "lib": [
+            "ES2020",
+			"dom",
+			"ES2021.String"
+        ],
+        "sourceMap": true,
+        "rootDir": "src",
+        "moduleResolution": "node",
+		"baseUrl": "./src/",
+		"paths": {
+			"@SolutionExplorerProvider": ["./SolutionExplorerProvider"],
+			"@actions": ["actions"],
+			"@commands": ["commands"],
+			"@commands/*": ["commands/*"],
+			"@core/*": ["core/*"],
+			"@events": ["events"],
+			"@extensions/*": ["extensions/*"],
+			"@logs": ["logs"],
+			"@templates": ["templates"],
+			"@tree": ["tree"],
+			"@tree/*": ["tree/*"],
+		},
+		"strict": true   /* enable all strict type-checking options */
+		/* Additional Checks */
+		// "noImplicitReturns": true, /* Report error when not all code paths in function return a value. */
+		// "noFallthroughCasesInSwitch": true, /* Report errors for fallthrough cases in switch statement. */
+		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
+    },
+    "exclude": [
+        "node_modules",
+        ".vscode-test"
+    ],
+    "include": [
+		"src/**/*.ts",
+		"./node_modules/vscode/vscode.d.ts",
+		"./node_modules/vscode/lib/*",
+	]
+}

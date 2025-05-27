@@ -1,0 +1,34 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        registry-url: https://registry.npmjs.org/
+
+    - name: npm install
+      run: npm install
+
+    - name: install vsce
+      run: npm i -g vsce
+
+    - name: publish vsce
+      id: publisher
+      run: |
+        vsce package
+        file=$(realpath $(ls -t *.vsix | head -1))
+        echo "::notice ::Generating a VSIX file at ${file}"
+        echo "vsix_path=${file}" >> "$GITHUB_OUTPUT"
+        vsce publish -p ${{ secrets.VSCE_TOKEN }}
+
+    - name:  publish ovsx
+      run: npx ovsx publish ${{ steps.publisher.ouputs.vsix_path }}  -p ${{ secrets.OVSX_TOKEN }}
