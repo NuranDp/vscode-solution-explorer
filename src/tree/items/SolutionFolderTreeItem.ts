@@ -18,7 +18,7 @@ async function getPath(context: TreeItemContext, solutionItem: SolutionItem): Pr
 
 export class SolutionFolderTreeItem extends TreeItem {
     private constructor(context: TreeItemContext, solutionItem: SolutionItem, path: string | undefined) {
-        super(context, solutionItem.name, TreeItemCollapsibleState.Expanded, ContextValues.solutionFolder, path, solutionItem);
+        super(context, solutionItem.name, TreeItemCollapsibleState.Collapsed, ContextValues.solutionFolder, path, solutionItem);
     }
 
     protected createChildren(childContext: TreeItemContext): Promise<TreeItem[]> {
