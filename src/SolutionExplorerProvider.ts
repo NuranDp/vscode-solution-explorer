@@ -141,13 +141,16 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		}
 	}
 
-	public selectActiveDocument(): Promise<void> {
-		if (vscode.window.activeTextEditor) {
-			return this.selectFile(vscode.window.activeTextEditor.document.uri.fsPath);
-		} else {
-			return Promise.resolve();
-		}
-	}
+	public async selectActiveDocument(): Promise<void> {
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Window,
+            title: 'Locating active document in Solution Explorer...'
+        }, async () => {
+            if (vscode.window.activeTextEditor) {
+                await this.selectFile(vscode.window.activeTextEditor.document.uri.fsPath);
+            }
+        });
+    }
 
 	public focus(): void {
 		if (this.treeView) {
