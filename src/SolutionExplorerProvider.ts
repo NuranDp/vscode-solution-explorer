@@ -14,6 +14,7 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 	private solutionSubscription: ISubscription | undefined;
 	private treeView: vscode.TreeView<sln.TreeItem> | undefined;
 	private _onDidChangeTreeData: vscode.EventEmitter<sln.TreeItem | undefined> = new vscode.EventEmitter<sln.TreeItem | undefined>();
+	private _initPromise: Promise<any> | null = null;
 
 	constructor(private readonly solutionFinder: SolutionFinder,
 		        private readonly solutionTreeItemCollection: SolutionTreeItemCollection,
@@ -122,7 +123,14 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		}
 
 		if (!element && !this.solutionTreeItemCollection.hasChildren) {
-			return this.createSolutionItems();
+			if (!this._initPromise) {
+				// Always reset before rebuilding
+				this.solutionTreeItemCollection.reset();
+				this._initPromise = this.createSolutionItems().finally(() => {
+					this._initPromise = null;
+				});
+			}
+			return this._initPromise.then(items => items || []);
 		}
 	}
 
