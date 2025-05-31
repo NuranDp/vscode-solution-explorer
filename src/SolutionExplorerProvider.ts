@@ -20,6 +20,8 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 	private lastRevealedItemId: string | undefined;
 	private expandedItemIds: Set<string> = new Set();
 	private restoringScrollPosition = false;
+	private static statusBarLoader: vscode.StatusBarItem | undefined;
+	private static loaderActivePromise: Promise<void> | null = null;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -246,42 +248,90 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		}
 	}
 
-	private async restoreExpandedState() {
+	private async showLoader(text: string): Promise<() => Promise<void>> {
+		if (!SolutionExplorerProvider.statusBarLoader) {
+			SolutionExplorerProvider.statusBarLoader = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
+			SolutionExplorerProvider.statusBarLoader.tooltip = 'Restoring Solution Explorer tree state...';
+		}
+		const loader = SolutionExplorerProvider.statusBarLoader;
+		loader.text = text;
+		loader.show();
+		const start = Date.now();
+		let finished = false;
+		return async () => {
+			if (finished) return;
+			finished = true;
+			const elapsed = Date.now() - start;
+			const minDuration = 500; // ms
+			if (elapsed < minDuration) {
+				await new Promise(res => setTimeout(res, minDuration - elapsed));
+			}
+			loader.hide();
+		};
+	}
+
+	private async restoreExpandedStateAndScroll() {
+		this.logger.log('[DEBUG] restoreExpandedStateAndScroll called');
+		console.log('[SolutionExplorer] restoreExpandedStateAndScroll called');
+		if (SolutionExplorerProvider.loaderActivePromise) {
+			await SolutionExplorerProvider.loaderActivePromise;
+			return;
+		}
 		const expandedIds = this.expandedItemIds;
-		if (!expandedIds || expandedIds.size === 0) return;
-		// 1. Expand only first-level expanded nodes immediately
-		const expandImmediate = async (items: sln.TreeItem[]) => {
-			const toExpand: sln.TreeItem[] = [];
-			for (const item of items) {
-				if (!item) continue;
-				if (item.id && expandedIds.has(item.id)) {
-					item.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
-					await item.getChildren();
-					toExpand.push(item);
+		if (!expandedIds || expandedIds.size === 0) {
+			this.logger.log('[DEBUG] No expandedIds, calling restoreScrollPosition');
+			console.log('[SolutionExplorer] No expandedIds, calling restoreScrollPosition');
+			await this.restoreScrollPosition();
+			return;
+		}
+		let hideLoader: (() => Promise<void>) | undefined;
+		SolutionExplorerProvider.loaderActivePromise = (async () => {
+			hideLoader = await this.showLoader('$(sync~spin) Restoring Solution Explorer tree...');
+			try {
+				// Breadth-first, parent-first, async-batched expansion
+				let queue: {item: sln.TreeItem, parentId?: string}[] = [];
+				for (const root of this.solutionTreeItemCollection.items) {
+					queue.push({item: root, parentId: undefined});
 				}
-			}
-			return toExpand;
-		};
-		// 2. Expand deeper nodes in small async batches (background)
-		const expandDeepAsync = async (parents: sln.TreeItem[], depth: number) => {
-			if (depth > 10) return; // avoid runaway recursion
-			const batch: Promise<void>[] = [];
-			for (const parent of parents) {
-				const children = await parent.getChildren();
-				for (const child of children) {
-					if (child.id && expandedIds.has(child.id)) {
-						child.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
-						batch.push(child.getChildren().then(() => {}));
+				const BATCH_SIZE = 20;
+				while (queue.length > 0) {
+					const batch = queue.splice(0, BATCH_SIZE);
+					const nextQueue: {item: sln.TreeItem, parentId?: string}[] = [];
+					for (const {item, parentId} of batch) {
+						// Only expand if root or parent is expanded
+						if (!parentId || expandedIds.has(parentId)) {
+							if (item.id && expandedIds.has(item.id)) {
+								item.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+								try {
+									await item.getChildren();
+								} catch {}
+							}
+							// Enqueue children if parent is expanded or is root
+							let children: sln.TreeItem[] = [];
+							try {
+								children = await item.getChildren();
+							} catch {}
+							for (const child of children) {
+								if (child && child.id) {
+									nextQueue.push({item: child, parentId: item.id});
+								}
+							}
+						}
 					}
+					// Yield to event loop for UI responsiveness
+					if (nextQueue.length > 0 || queue.length > 0) {
+						await new Promise(res => setTimeout(res, 0));
+					}
+					queue.push(...nextQueue);
 				}
-				// Schedule next level after a short delay
-				setTimeout(() => expandDeepAsync(children, depth + 1), 50);
+				// Restore scroll/selection after expansion, but before hiding loader
+				await this.restoreScrollPosition();
+			} finally {
+				if (hideLoader) await hideLoader();
+				SolutionExplorerProvider.loaderActivePromise = null;
 			}
-			await Promise.all(batch);
-		};
-		// Start: expand first-level, then schedule deeper expansion
-		const firstLevel = await expandImmediate(this.solutionTreeItemCollection.items);
-		setTimeout(() => expandDeepAsync(firstLevel, 1), 100);
+		})();
+		await SolutionExplorerProvider.loaderActivePromise;
 	}
 
 	private onActiveEditorChanged(): void {
@@ -306,9 +356,13 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 	}
 
 	private async createSolutionItems(): Promise<sln.TreeItem[]> {
+		this.logger.log('[DEBUG] createSolutionItems called');
+		console.log('[SolutionExplorer] createSolutionItems called');
 		if (!this.solutionFinder) { return []; }
 		let solutionPaths = await this.solutionFinder.findSolutions();
 		if (solutionPaths.length <= 0 && this.solutionFinder.hasWorkspaceRoots) {
+			this.logger.log('[DEBUG] No solution paths found, returning empty');
+			console.log('[SolutionExplorer] No solution paths found, returning empty');
 			// return empty to show welcome view
 			return [];
 		}
@@ -320,10 +374,9 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		}
 		// Restore scroll position after tree is built
 		setTimeout(() => {
-			this.logger.log('[DEBUG] Tree built, calling restoreScrollPosition');
-			console.log('[SolutionExplorer] Tree built, calling restoreScrollPosition');
-			this.restoreExpandedState();
-			this.restoreScrollPosition();
+			this.logger.log('[DEBUG] Tree built, calling restoreExpandedStateAndScroll');
+			console.log('[SolutionExplorer] Tree built, calling restoreExpandedStateAndScroll');
+			this.restoreExpandedStateAndScroll();
 		}, 500);
 		return this.solutionTreeItemCollection.items;
 	}
