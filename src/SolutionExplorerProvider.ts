@@ -15,18 +15,26 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 	private treeView: vscode.TreeView<sln.TreeItem> | undefined;
 	private _onDidChangeTreeData: vscode.EventEmitter<sln.TreeItem | undefined> = new vscode.EventEmitter<sln.TreeItem | undefined>();
 	private _initPromise: Promise<any> | null = null;
+	private static readonly LAST_REVEALED_ITEM_KEY = 'solutionExplorer.lastRevealedItemId';
+	private static readonly EXPANDED_IDS_KEY = 'solutionExplorer.expandedItemIds';
+	private lastRevealedItemId: string | undefined;
+	private expandedItemIds: Set<string> = new Set();
+	private restoringScrollPosition = false;
 
-	constructor(private readonly solutionFinder: SolutionFinder,
-		        private readonly solutionTreeItemCollection: SolutionTreeItemCollection,
-				private readonly dragAndDropController: SolutionExplorerDragAndDropController,
-				private readonly templateEngineCollection: TemplateEngineCollection,
-				public readonly eventAggregator: IEventAggregator,
-				public readonly logger: ILogger) {
+	constructor(
+		private readonly context: vscode.ExtensionContext,
+		private readonly solutionFinder: SolutionFinder,
+		private readonly solutionTreeItemCollection: SolutionTreeItemCollection,
+		private readonly dragAndDropController: SolutionExplorerDragAndDropController,
+		private readonly templateEngineCollection: TemplateEngineCollection,
+		public readonly eventAggregator: IEventAggregator,
+		public readonly logger: ILogger
+	) {
 
 		super(() => this.dispose());
 		vscode.window.onDidChangeActiveTextEditor(() => this.onActiveEditorChanged());
 		//vscode.window.onDidChangeVisibleTextEditors(data => this.onVisibleEditorsChanged(data));
-    }
+	}
 
 	public get onDidChangeTreeData(): vscode.Event<sln.TreeItem | undefined> {
 		return this._onDidChangeTreeData.event;
@@ -59,6 +67,22 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 			} else if (showMode === "explorer") {
 				this.treeView = vscode.window.createTreeView('slnexpl', options);
 			}
+			// Restore expanded state from workspaceState
+			const savedExpanded = this.context.workspaceState.get<string[]>(SolutionExplorerProvider.EXPANDED_IDS_KEY, []);
+			this.expandedItemIds = new Set(savedExpanded);
+			// Listen for expand/collapse events
+			this.treeView?.onDidExpandElement(ev => {
+				if (ev.element.id) {
+					this.expandedItemIds.add(ev.element.id);
+					this.context.workspaceState.update(SolutionExplorerProvider.EXPANDED_IDS_KEY, Array.from(this.expandedItemIds));
+				}
+			});
+			this.treeView?.onDidCollapseElement(ev => {
+				if (ev.element.id) {
+					this.expandedItemIds.delete(ev.element.id);
+					this.context.workspaceState.update(SolutionExplorerProvider.EXPANDED_IDS_KEY, Array.from(this.expandedItemIds));
+				}
+			});
 			this.treeView?.onDidChangeSelection(ev => {
 				let selectionContext = undefined;
 				if (ev.selection.length === 1) {
@@ -68,7 +92,20 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 					selectionContext = sln.ContextValues.multipleSelection;
 				}
 				vscode.commands.executeCommand('setContext', 'solutionExplorer.selectionContext', selectionContext);
-			})
+				// Save last revealed item id
+				if (!this.restoringScrollPosition && ev.selection.length > 0 && ev.selection[0].id) {
+					this.lastRevealedItemId = ev.selection[0].id;
+					this.context.workspaceState.update(SolutionExplorerProvider.LAST_REVEALED_ITEM_KEY, this.lastRevealedItemId);
+					this.logger.log(`[DEBUG] Saved lastRevealedItemId: ${this.lastRevealedItemId}`);
+					console.log('[SolutionExplorer] Saved lastRevealedItemId:', this.lastRevealedItemId);
+				}
+			});
+			this.treeView?.onDidChangeVisibility(ev => {
+				if (!ev.visible) return;
+				this.logger.log('[DEBUG] TreeView became visible, attempting to restore scroll position');
+				console.log('[SolutionExplorer] TreeView became visible, attempting to restore scroll position');
+				this.restoreScrollPosition();
+			});
 		}
 	}
 
@@ -140,7 +177,7 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 
 	public async selectFile(filepath: string): Promise<void> {
 		if (!this.solutionTreeItemCollection.hasChildren) { return; }
-		for(let i = 0; i < this.solutionTreeItemCollection.length; i++) {
+		for (let i = 0; i < this.solutionTreeItemCollection.length; i++) {
 			let result = await this.solutionTreeItemCollection.getItem(i).search(filepath);
 			if (result) {
 				this.selectTreeItem(result);
@@ -150,15 +187,15 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 	}
 
 	public async selectActiveDocument(): Promise<void> {
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Window,
-            title: 'Locating active document in Solution Explorer...'
-        }, async () => {
-            if (vscode.window.activeTextEditor) {
-                await this.selectFile(vscode.window.activeTextEditor.document.uri.fsPath);
-            }
-        });
-    }
+		await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Window,
+			title: 'Locating active document in Solution Explorer...'
+		}, async () => {
+			if (vscode.window.activeTextEditor) {
+				await this.selectFile(vscode.window.activeTextEditor.document.uri.fsPath);
+			}
+		});
+	}
 
 	public focus(): void {
 		if (this.treeView) {
@@ -173,38 +210,78 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		}
 	}
 
-	private async createSolutionItems(): Promise<sln.TreeItem[]> {
-		if (!this.solutionFinder) { return []; }
-
-		let solutionPaths = await this.solutionFinder.findSolutions();
-		if (solutionPaths.length <= 0 && this.solutionFinder.hasWorkspaceRoots) {
-			// return empty to show welcome view
-			return [];
+	private async restoreScrollPosition() {
+		if (!this.treeView) return;
+		if (this.restoringScrollPosition) return;
+		this.restoringScrollPosition = true;
+		try {
+			const lastId = this.lastRevealedItemId || this.context.workspaceState.get<string>(SolutionExplorerProvider.LAST_REVEALED_ITEM_KEY);
+			this.logger.log(`[DEBUG] Attempting to restore scroll position to itemId: ${lastId}`);
+			console.log('[SolutionExplorer] Attempting to restore scroll position to itemId:', lastId);
+			if (lastId) {
+				// Wait for tree to be ready
+				await new Promise(resolve => setTimeout(resolve, 300));
+				let item = await this.solutionTreeItemCollection.findAndExpandTreeItemById(lastId);
+				this.logger.log(`[DEBUG] Item lookup for id ${lastId}: ${item ? 'found' : 'not found'}`);
+				console.log('[SolutionExplorer] Item lookup for id', lastId, item ? 'found' : 'not found');
+				if (!item) {
+					// Fallback: try to find the closest parent by ID prefix
+					item = await this.solutionTreeItemCollection.findClosestParentByIdPrefix(lastId);
+					this.logger.log(`[DEBUG] Fallback: Closest parent for id ${lastId}: ${item ? item.id : 'not found'}`);
+					console.log('[SolutionExplorer] Fallback: Closest parent for id', lastId, item ? item.id : 'not found');
+				}
+				if (item) {
+					await this.treeView.reveal(item, { select: false, focus: false });
+					this.logger.log(`[DEBUG] Revealed item ${item.id} in treeView`);
+					console.log('[SolutionExplorer] Revealed item', item.id, 'in treeView');
+				} else {
+					this.logger.log(`[DEBUG] Could not find item with id ${lastId} or any parent to reveal`);
+					console.log('[SolutionExplorer] Could not find item with id', lastId, 'or any parent to reveal');
+				}
+			}
+		} catch (err) {
+			this.logger.log('[ERROR] Error restoring scroll position: ' + err);
+		} finally {
+			this.restoringScrollPosition = false;
 		}
-
-		this.templateEngineCollection.reset();
-		for(let i = 0; i < solutionPaths.length; i++) {
-			let s = solutionPaths[i];
-
-			await this.solutionTreeItemCollection.addSolution(s.sln, s.root, this);
-			this.templateEngineCollection.createTemplateEngine(s.root);
-		}
-
-		return this.solutionTreeItemCollection.items;
 	}
 
-	private onFileEvent(event: IEvent): void {
-        let fileEvent = <IFileEvent> event;
-
-		if (this.solutionFinder.isWorkspaceSolutionFile(fileEvent.path)) {
-			this.solutionTreeItemCollection.reset();
-			this.refresh();
-        }
-	}
-
-	private onSolutionEvent(event: IEvent): void {
-		this.solutionTreeItemCollection.reset();
-		this.refresh();
+	private async restoreExpandedState() {
+		const expandedIds = this.expandedItemIds;
+		if (!expandedIds || expandedIds.size === 0) return;
+		// 1. Expand only first-level expanded nodes immediately
+		const expandImmediate = async (items: sln.TreeItem[]) => {
+			const toExpand: sln.TreeItem[] = [];
+			for (const item of items) {
+				if (!item) continue;
+				if (item.id && expandedIds.has(item.id)) {
+					item.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+					await item.getChildren();
+					toExpand.push(item);
+				}
+			}
+			return toExpand;
+		};
+		// 2. Expand deeper nodes in small async batches (background)
+		const expandDeepAsync = async (parents: sln.TreeItem[], depth: number) => {
+			if (depth > 10) return; // avoid runaway recursion
+			const batch: Promise<void>[] = [];
+			for (const parent of parents) {
+				const children = await parent.getChildren();
+				for (const child of children) {
+					if (child.id && expandedIds.has(child.id)) {
+						child.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+						batch.push(child.getChildren().then(() => {}));
+					}
+				}
+				// Schedule next level after a short delay
+				setTimeout(() => expandDeepAsync(children, depth + 1), 50);
+			}
+			await Promise.all(batch);
+		};
+		// Start: expand first-level, then schedule deeper expansion
+		const firstLevel = await expandImmediate(this.solutionTreeItemCollection.items);
+		setTimeout(() => expandDeepAsync(firstLevel, 1), 100);
 	}
 
 	private onActiveEditorChanged(): void {
@@ -212,11 +289,42 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		if (!shouldExecute) { return; }
 		if (!vscode.window.activeTextEditor) { return; }
 		if (vscode.window.activeTextEditor.document.uri.scheme !== 'file') { return; }
-
 		this.selectActiveDocument();
 	}
 
-	private onVisibleEditorsChanged(editors: vscode.TextEditor[]): void {
+	private onSolutionEvent(event: IEvent): void {
+		this.solutionTreeItemCollection.reset();
+		this.refresh();
+	}
 
+	private onFileEvent(event: IEvent): void {
+		let fileEvent = <IFileEvent>event;
+		if (this.solutionFinder.isWorkspaceSolutionFile(fileEvent.path)) {
+			this.solutionTreeItemCollection.reset();
+			this.refresh();
+		}
+	}
+
+	private async createSolutionItems(): Promise<sln.TreeItem[]> {
+		if (!this.solutionFinder) { return []; }
+		let solutionPaths = await this.solutionFinder.findSolutions();
+		if (solutionPaths.length <= 0 && this.solutionFinder.hasWorkspaceRoots) {
+			// return empty to show welcome view
+			return [];
+		}
+		this.templateEngineCollection.reset();
+		for (let i = 0; i < solutionPaths.length; i++) {
+			let s = solutionPaths[i];
+			await this.solutionTreeItemCollection.addSolution(s.sln, s.root, this);
+			this.templateEngineCollection.createTemplateEngine(s.root);
+		}
+		// Restore scroll position after tree is built
+		setTimeout(() => {
+			this.logger.log('[DEBUG] Tree built, calling restoreScrollPosition');
+			console.log('[SolutionExplorer] Tree built, calling restoreScrollPosition');
+			this.restoreExpandedState();
+			this.restoreScrollPosition();
+		}, 500);
+		return this.solutionTreeItemCollection.items;
 	}
 }

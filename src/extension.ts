@@ -23,7 +23,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const solutionFinder = new SolutionFinder(paths, eventAggregator);
     const solutionExplorerDragAndDropController = new SolutionExplorerDragAndDropController(actionsRunner, solutionTreeItemCollection);
     const templateEngineCollection = new TemplateEngineCollection();
-    const solutionExplorerProvider = new SolutionExplorerProvider(solutionFinder, solutionTreeItemCollection, solutionExplorerDragAndDropController, templateEngineCollection, eventAggregator, logger);
+    const solutionExplorerProvider = new SolutionExplorerProvider(context, solutionFinder, solutionTreeItemCollection, solutionExplorerDragAndDropController, templateEngineCollection, eventAggregator, logger);
     const solutionExplorerCommands = new SolutionExplorerCommands(context, solutionExplorerProvider, actionsRunner, templateEngineCollection, eventAggregator);
     const solutionExplorerFileWatcher = new SolutionExplorerFileWatcher(eventAggregator);
     const solutionExplorerOutputChannel = new SolutionExplorerOutputChannel(eventAggregator);
