@@ -270,6 +270,22 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		};
 	}
 
+	private async expandParents(item: sln.TreeItem, expandedIds: Set<string>): Promise<void> {
+		const parent = item.parent;
+		if (parent && parent.id && !expandedIds.has(parent.id)) {
+			await this.expandParents(parent, expandedIds);
+			if (parent.collapsibleState !== vscode.TreeItemCollapsibleState.Expanded) {
+				parent.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+				try {
+					await parent.getChildren();
+				} catch (err) {
+					this.logger.log(`[DEBUG] Error expanding parent: ${err}`);
+				}
+				this.logger.log(`[DEBUG] Expanded parent ${parent.id}`);
+			}
+		}
+	}
+
 	private async restoreExpandedStateAndScroll() {
 		this.logger.log('[DEBUG] restoreExpandedStateAndScroll called');
 		console.log('[SolutionExplorer] restoreExpandedStateAndScroll called');
@@ -288,7 +304,7 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 		SolutionExplorerProvider.loaderActivePromise = (async () => {
 			hideLoader = await this.showLoader('$(sync~spin) Restoring Solution Explorer tree...');
 			try {
-				// Breadth-first, parent-first, async-batched expansion
+				// Breadth-first, async-batched expansion: only expand nodes in expandedIds
 				let queue: {item: sln.TreeItem, parentId?: string}[] = [];
 				for (const root of this.solutionTreeItemCollection.items) {
 					queue.push({item: root, parentId: undefined});
@@ -298,15 +314,18 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 					const batch = queue.splice(0, BATCH_SIZE);
 					const nextQueue: {item: sln.TreeItem, parentId?: string}[] = [];
 					for (const {item, parentId} of batch) {
-						// Only expand if root or parent is expanded
-						if (!parentId || expandedIds.has(parentId)) {
-							if (item.id && expandedIds.has(item.id)) {
+						// Only expand if this node's id is in expandedIds
+						if (item.id && expandedIds.has(item.id)) {
+							if (item.collapsibleState !== vscode.TreeItemCollapsibleState.Expanded) {
 								item.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
 								try {
 									await item.getChildren();
-								} catch {}
+								} catch (err) {
+									this.logger.log(`[DEBUG] Error expanding item: ${err}`);
+								}
+								this.logger.log(`[DEBUG] Expanded item ${item.id}`);
 							}
-							// Enqueue children if parent is expanded or is root
+							// Only enqueue children if this node is expanded
 							let children: sln.TreeItem[] = [];
 							try {
 								children = await item.getChildren();
@@ -323,6 +342,10 @@ export class SolutionExplorerProvider extends vscode.Disposable implements vscod
 						await new Promise(res => setTimeout(res, 0));
 					}
 					queue.push(...nextQueue);
+				}
+				// Optionally validate tree IDs after build
+				for (const root of this.solutionTreeItemCollection.items) {
+					await sln.TreeItem.validateTreeIds(root);
 				}
 				// Restore scroll/selection after expansion, but before hiding loader
 				await this.restoreScrollPosition();

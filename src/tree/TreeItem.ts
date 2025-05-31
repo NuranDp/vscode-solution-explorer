@@ -64,15 +64,22 @@ export abstract class TreeItem extends vscode.TreeItem {
 			let childContext = this.context.copy(undefined, this);
 			try {
 				this.children = await this.createChildren(childContext);
-				// clean duplicated ids
-				let ids: string[] = [];
+				// clean duplicated or missing ids
+				const seen = new Set<string>();
 				this.children = this.children.filter(c => {
-					const i = c.id || '';
-					if (ids.indexOf(i) >= 0) { return false; }
-					ids.push(i);
+					if (!c.id) {
+						console.warn('[SolutionExplorer] TreeItem missing id:', c);
+						return false;
+					}
+					if (seen.has(c.id)) {
+						console.warn('[SolutionExplorer] Duplicate TreeItem id:', c.id, c);
+						return false;
+					}
+					seen.add(c.id);
 					return true;
 				});
-			} catch {
+			} catch (err) {
+				console.error('[SolutionExplorer] Error in getChildren:', err);
 				this.children = [];
 			}
         }
@@ -204,4 +211,30 @@ export abstract class TreeItem extends vscode.TreeItem {
 
 		return result;
     }
+
+	/**
+	 * Validate the entire tree for unique, non-empty IDs. Logs all issues.
+	 */
+	public static async validateTreeIds(root: TreeItem): Promise<void> {
+	    const all: TreeItem[] = [];
+	    await (async function collect(item: TreeItem) {
+	        all.push(item);
+	        try {
+	            const children = await item.getChildren();
+	            for (const child of children) {
+	                await collect(child);
+	            }
+	        } catch {}
+	    })(root);
+	    const seen = new Set<string>();
+	    for (const item of all) {
+	        if (!item.id) {
+	            console.warn('[SolutionExplorer] TreeItem missing id:', item);
+	        } else if (seen.has(item.id)) {
+	            console.warn('[SolutionExplorer] Duplicate TreeItem id in tree:', item.id, item);
+	        } else {
+	            seen.add(item.id);
+	        }
+	    }
+	}
 }
